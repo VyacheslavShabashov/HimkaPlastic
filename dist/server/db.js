@@ -8,260 +8,214 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = void 0;
-// In-memory data store
-let users = [
-    {
-        id: "user-1",
-        name: "Тестовый Пользователь",
-        email: "test@example.com",
-        companyName: "Тест Ком",
-        inn: "1234567890",
-        kpp: "098765432",
-        billingAddress: "г. Тест, ул. Тестовая, д.1",
-        dashboardSettings: JSON.stringify([
-            { id: 'w1', type: 'totalOrders', position: 0, size: 'small' },
-            { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
-            { id: 'w3', type: 'environmentalImpact', position: 2, size: 'small' },
-        ]),
-        isAdmin: false,
-    },
-    {
-        id: "admin-1",
-        name: "Администратор",
-        email: "admin@example.com",
-        companyName: "Эко Трэк",
-        isAdmin: true,
-        dashboardSettings: JSON.stringify([
-            { id: 'w1', type: 'totalOrders', position: 0, size: 'large' },
-            { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
-        ]),
-    }
-];
-let orders = [
-    {
-        id: "order-1",
-        userId: "user-1",
-        materialType: "PET",
-        volume: 500,
-        pickupAddress: "г. Москва, ул. Тверская, д.1",
-        price: 12500,
-        status: "completed",
-        paymentStatus: "paid",
-        environmentalImpact: 750,
-        createdAt: new Date("2023-01-10"),
-        updatedAt: new Date("2023-01-15"),
-    },
-    {
-        id: "order-2",
-        userId: "user-1",
-        materialType: "HDPE",
-        volume: 300,
-        pickupAddress: "г. Москва, ул. Ленина, д.15",
-        price: 9000,
-        status: "in_progress",
-        paymentStatus: "pending",
-        environmentalImpact: 450,
-        createdAt: new Date("2023-02-05"),
-        updatedAt: new Date("2023-02-10"),
-    },
-];
-let marketRates = [
-    {
-        id: "rate-1",
-        materialType: "PET",
-        pricePerKg: 25,
-        logisticsCostPerKm: 15
-    },
-    {
-        id: "rate-2",
-        materialType: "HDPE",
-        pricePerKg: 30,
-        logisticsCostPerKm: 17.5
-    },
-];
-let regionalTaxes = [
-    { region: "Москва", environmentalTax: 0.5, customsDuty: 200 },
-    { region: "Санкт-Петербург", environmentalTax: 0.4, customsDuty: 180 },
-    { region: "Екатеринбург", environmentalTax: 0.3, customsDuty: 150 },
-    { region: "Новосибирск", environmentalTax: 0.35, customsDuty: 160 },
-    { region: "По умолчанию", environmentalTax: 0.25, customsDuty: 100 }
-];
-// Инициализация массива финансовых отчетов с примерами данных
-let financialReports = [
-    {
-        id: "report-2023-1",
-        month: 1,
-        year: 2023,
-        totalPaid: 45000,
-        volume: 1800,
-        monthName: 'Январь'
-    },
-    {
-        id: "report-2023-2",
-        month: 2,
-        year: 2023,
-        totalPaid: 38000,
-        volume: 1500,
-        monthName: 'Февраль'
-    }
-];
-// Database interface
+const pg_1 = require("pg");
+const crypto_1 = require("crypto");
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
+const pool = new pg_1.Pool({
+    connectionString: process.env.DATABASE_URL,
+});
+const toSnake = (str) => str.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
 exports.db = {
+    pool,
     // User operations
     user: {
         findUnique: (query) => __awaiter(void 0, void 0, void 0, function* () {
             if (query.where.id) {
-                return users.find(u => u.id === query.where.id) || null;
+                const res = yield pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [query.where.id]);
+                return res.rows[0] || null;
             }
             if (query.where.email) {
-                return users.find(u => u.email === query.where.email) || null;
+                const res = yield pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [query.where.email]);
+                return res.rows[0] || null;
             }
             return null;
         }),
         findMany: () => __awaiter(void 0, void 0, void 0, function* () {
-            return [...users];
+            const res = yield pool.query('SELECT * FROM users');
+            return res.rows;
         }),
         create: (data) => __awaiter(void 0, void 0, void 0, function* () {
-            const newUser = Object.assign(Object.assign({}, data), { id: `user-${Date.now()}` });
-            users.push(newUser);
-            return newUser;
+            const id = (0, crypto_1.randomUUID)();
+            const res = yield pool.query(`INSERT INTO users (id, name, email, company_name, inn, kpp, billing_address, is_admin, dashboard_settings)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [id, data.name, data.email, data.companyName || null, data.inn || null, data.kpp || null, data.billingAddress || null, data.isAdmin, data.dashboardSettings]);
+            return res.rows[0];
         }),
         update: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const userIndex = users.findIndex(u => u.id === query.where.id);
-            if (userIndex === -1) {
-                throw new Error(`User not found: ${query.where.id}`);
+            const fields = Object.keys(query.data);
+            if (fields.length === 0) {
+                const res = yield pool.query('SELECT * FROM users WHERE id=$1', [query.where.id]);
+                if (!res.rows[0])
+                    throw new Error(`User not found: ${query.where.id}`);
+                return res.rows[0];
             }
-            users[userIndex] = Object.assign(Object.assign({}, users[userIndex]), query.data);
-            return users[userIndex];
+            const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+            const values = fields.map(f => query.data[f]);
+            values.push(query.where.id);
+            const res = yield pool.query(`UPDATE users SET ${sets} WHERE id=$${values.length} RETURNING *`, values);
+            if (!res.rows[0])
+                throw new Error(`User not found: ${query.where.id}`);
+            return res.rows[0];
         }),
         delete: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const userIndex = users.findIndex(u => u.id === query.where.id);
-            if (userIndex === -1) {
+            const res = yield pool.query('DELETE FROM users WHERE id=$1 RETURNING *', [query.where.id]);
+            if (!res.rows[0])
                 throw new Error(`User not found: ${query.where.id}`);
-            }
-            const deletedUser = users[userIndex];
-            users.splice(userIndex, 1);
-            return deletedUser;
-        })
+            return res.rows[0];
+        }),
     },
     // Order operations
     order: {
         findMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            let result = [...orders];
-            if (query && query.where && query.where.userId) {
-                result = result.filter(o => o.userId === query.where.userId);
+            var _a, _b, _c, _d;
+            let sql = 'SELECT o.*';
+            if ((_a = query === null || query === void 0 ? void 0 : query.include) === null || _a === void 0 ? void 0 : _a.user) {
+                sql += ', u.* as user';
             }
-            if (query && query.orderBy && typeof query.orderBy.createdAt === 'string') {
-                result.sort((a, b) => {
-                    const dateA = new Date(a.createdAt).getTime();
-                    const dateB = new Date(b.createdAt).getTime();
-                    return query.orderBy.createdAt === 'desc' ? dateB - dateA : dateA - dateB;
-                });
+            sql += ' FROM orders o';
+            const values = [];
+            if ((_b = query === null || query === void 0 ? void 0 : query.include) === null || _b === void 0 ? void 0 : _b.user) {
+                sql += ' JOIN users u ON o.user_id = u.id';
             }
-            if (query && query.include && query.include.user) {
-                result = result.map(order => {
-                    const user = users.find(u => u.id === order.userId);
-                    return Object.assign(Object.assign({}, order), { user });
-                });
+            if ((_c = query === null || query === void 0 ? void 0 : query.where) === null || _c === void 0 ? void 0 : _c.userId) {
+                values.push(query.where.userId);
+                sql += ` WHERE o.user_id = $${values.length}`;
             }
-            return result;
+            if ((_d = query === null || query === void 0 ? void 0 : query.orderBy) === null || _d === void 0 ? void 0 : _d.createdAt) {
+                sql += ` ORDER BY o.created_at ${query.orderBy.createdAt.toUpperCase()}`;
+            }
+            const res = yield pool.query(sql, values);
+            return res.rows;
         }),
         findUnique: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const order = orders.find(o => o.id === query.where.id) || null;
-            return order;
+            const res = yield pool.query('SELECT * FROM orders WHERE id=$1', [query.where.id]);
+            return res.rows[0] || null;
         }),
         create: (data) => __awaiter(void 0, void 0, void 0, function* () {
-            const newOrder = Object.assign(Object.assign({}, data), { id: `order-${Date.now()}`, createdAt: new Date(), updatedAt: new Date() });
-            orders.push(newOrder);
-            return newOrder;
+            const id = (0, crypto_1.randomUUID)();
+            const res = yield pool.query(`INSERT INTO orders (id, user_id, material_type, volume, pickup_address, price, status, payment_status, environmental_impact, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW()) RETURNING *`, [id, data.userId, data.materialType, data.volume, data.pickupAddress, data.price, data.status, data.paymentStatus || null, data.environmentalImpact || 0]);
+            return res.rows[0];
         }),
         update: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const orderIndex = orders.findIndex(o => o.id === query.where.id);
-            if (orderIndex === -1) {
-                throw new Error(`Order not found: ${query.where.id}`);
+            const fields = Object.keys(query.data);
+            if (fields.length === 0) {
+                const res = yield pool.query('SELECT * FROM orders WHERE id=$1', [query.where.id]);
+                if (!res.rows[0])
+                    throw new Error(`Order not found: ${query.where.id}`);
+                return res.rows[0];
             }
-            orders[orderIndex] = Object.assign(Object.assign(Object.assign({}, orders[orderIndex]), query.data), { updatedAt: new Date() });
-            return orders[orderIndex];
+            const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+            const values = fields.map(f => query.data[f]);
+            values.push(query.where.id);
+            const res = yield pool.query(`UPDATE orders SET ${sets}, updated_at=NOW() WHERE id=$${values.length} RETURNING *`, values);
+            if (!res.rows[0])
+                throw new Error(`Order not found: ${query.where.id}`);
+            return res.rows[0];
         }),
         delete: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const orderIndex = orders.findIndex(o => o.id === query.where.id);
-            if (orderIndex === -1) {
+            const res = yield pool.query('DELETE FROM orders WHERE id=$1 RETURNING *', [query.where.id]);
+            if (!res.rows[0])
                 throw new Error(`Order not found: ${query.where.id}`);
-            }
-            const deletedOrder = orders[orderIndex];
-            orders.splice(orderIndex, 1);
-            return deletedOrder;
+            return res.rows[0];
         }),
         updateMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
             return exports.db.order.update(query);
-        })
+        }),
     },
     // Market rate operations
     marketRate: {
         findMany: () => __awaiter(void 0, void 0, void 0, function* () {
-            return [...marketRates];
+            const res = yield pool.query('SELECT * FROM market_rates');
+            return res.rows;
         }),
         findFirst: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            return marketRates.find(r => r.materialType === query.where.materialType) || null;
+            const res = yield pool.query('SELECT * FROM market_rates WHERE material_type=$1 LIMIT 1', [query.where.materialType]);
+            return res.rows[0] || null;
         }),
         updateMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const rateIndex = marketRates.findIndex(r => r.materialType === query.where.materialType);
-            if (rateIndex === -1) {
+            const fields = Object.keys(query.data);
+            const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+            const values = fields.map(f => query.data[f]);
+            values.push(query.where.materialType);
+            const res = yield pool.query(`UPDATE market_rates SET ${sets} WHERE material_type=$${values.length} RETURNING *`, values);
+            if (!res.rows[0])
                 throw new Error(`Market rate not found: ${query.where.materialType}`);
-            }
-            marketRates[rateIndex] = Object.assign(Object.assign({}, marketRates[rateIndex]), query.data);
-            return marketRates[rateIndex];
+            return res.rows[0];
         }),
         createMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            const newRates = query.data.map(rate => (Object.assign(Object.assign({}, rate), { id: `rate-${Date.now()}-${Math.floor(Math.random() * 1000)}` })));
-            marketRates.push(...newRates);
-            return newRates;
-        })
+            const result = [];
+            for (const rate of query.data) {
+                const id = (0, crypto_1.randomUUID)();
+                const res = yield pool.query(`INSERT INTO market_rates (id, material_type, price_per_kg, logistics_cost_per_km)
+           VALUES ($1,$2,$3,$4) RETURNING *`, [id, rate.materialType, rate.pricePerKg, rate.logisticsCostPerKm]);
+                result.push(res.rows[0]);
+            }
+            return result;
+        }),
     },
     // Regional tax operations
     regionalTax: {
         findMany: () => __awaiter(void 0, void 0, void 0, function* () {
-            return [...regionalTaxes];
+            const res = yield pool.query('SELECT * FROM regional_taxes');
+            return res.rows;
         }),
         findFirst: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            return regionalTaxes.find(t => t.region === query.where.region) ||
-                regionalTaxes.find(t => t.region === "По умолчанию") || null;
+            const res = yield pool.query('SELECT * FROM regional_taxes WHERE region=$1 LIMIT 1', [query.where.region]);
+            if (res.rows[0])
+                return res.rows[0];
+            const def = yield pool.query('SELECT * FROM regional_taxes WHERE region=$1 LIMIT 1', ['По умолчанию']);
+            return def.rows[0] || null;
         }),
         createMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            regionalTaxes.push(...query.data);
-            return query.data;
-        })
+            const inserted = [];
+            for (const t of query.data) {
+                const res = yield pool.query(`INSERT INTO regional_taxes (region, environmental_tax, customs_duty)
+           VALUES ($1,$2,$3) RETURNING *`, [t.region, t.environmentalTax, t.customsDuty]);
+                inserted.push(res.rows[0]);
+            }
+            return inserted;
+        }),
     },
     // Financial report operations
     financialReport: {
         findMany: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            let result = [...financialReports];
-            if (query && query.where) {
-                if (query.where.year) {
-                    result = result.filter(r => r.year === query.where.year);
-                }
-                if (query.where.month) {
-                    result = result.filter(r => r.month === query.where.month);
-                }
+            var _a, _b;
+            let sql = 'SELECT * FROM financial_reports';
+            const values = [];
+            const conditions = [];
+            if ((_a = query === null || query === void 0 ? void 0 : query.where) === null || _a === void 0 ? void 0 : _a.year) {
+                values.push(query.where.year);
+                conditions.push(`year=$${values.length}`);
             }
-            return result;
+            if (((_b = query === null || query === void 0 ? void 0 : query.where) === null || _b === void 0 ? void 0 : _b.month) !== undefined) {
+                values.push(query.where.month);
+                conditions.push(`month=$${values.length}`);
+            }
+            if (conditions.length)
+                sql += ' WHERE ' + conditions.join(' AND ');
+            const res = yield pool.query(sql, values);
+            return res.rows;
         }),
         findUnique: (query) => __awaiter(void 0, void 0, void 0, function* () {
-            return financialReports.find(r => r.id === query.where.id) || null;
+            const res = yield pool.query('SELECT * FROM financial_reports WHERE id=$1', [query.where.id]);
+            return res.rows[0] || null;
         }),
         create: (data) => __awaiter(void 0, void 0, void 0, function* () {
-            const newReport = Object.assign(Object.assign({}, data), { id: `report-${data.year}-${data.month}` });
-            // Check if report already exists
-            const existingIndex = financialReports.findIndex(r => r.year === data.year && r.month === data.month);
-            if (existingIndex !== -1) {
-                financialReports[existingIndex] = newReport;
-            }
-            else {
-                financialReports.push(newReport);
-            }
-            return newReport;
-        })
-    }
+            const id = `report-${data.year}-${data.month}`;
+            const res = yield pool.query(`INSERT INTO financial_reports (id, month, year, total_paid, volume, month_name)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (id) DO UPDATE SET
+           total_paid=EXCLUDED.total_paid,
+           volume=EXCLUDED.volume,
+           month_name=EXCLUDED.month_name
+         RETURNING *`, [id, data.month, data.year, data.totalPaid, data.volume, data.monthName]);
+            return res.rows[0];
+        }),
+    },
 };
