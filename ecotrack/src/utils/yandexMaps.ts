@@ -4,8 +4,11 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-// Yandex Maps API key
-const YANDEX_MAPS_API_KEY = process.env.YANDEX_MAPS_API_KEY || '8cd50efd-1a88-46d3-821a-643cbfcc250a';
+// Yandex Maps API key (must be provided via environment variable)
+const YANDEX_MAPS_API_KEY = process.env.YANDEX_MAPS_API_KEY as string;
+if (!YANDEX_MAPS_API_KEY) {
+  throw new Error('YANDEX_MAPS_API_KEY environment variable is required');
+}
 
 // Константа с адресом ООО Химка пластик
 export const HIMKA_PLASTIC_ADDRESS = "Заводская ул. 2А корп.28 Химки";

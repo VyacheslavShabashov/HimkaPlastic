@@ -291,7 +291,10 @@ app.get('/api/admin/orders', adminMiddleware, (req, res) => __awaiter(void 0, vo
 }));
 // Yandex Maps API
 app.get('/api/maps/config', (req, res) => {
-    const apiKey = process.env.YANDEX_MAPS_API_KEY || '8cd50efd-1a88-46d3-821a-643cbfcc250a';
+    const apiKey = process.env.YANDEX_MAPS_API_KEY;
+    if (!apiKey) {
+        return res.status(500).json({ error: 'YANDEX_MAPS_API_KEY is not configured' });
+    }
     res.json({
         apiKey,
         scriptUrl: `https://api-maps.yandex.ru/v3/?apikey=${apiKey}&lang=ru_RU`
