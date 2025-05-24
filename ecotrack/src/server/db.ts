@@ -1,314 +1,225 @@
-// In-memory database implementation
+import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
+import dotenv from 'dotenv';
 import { User, Order, MarketRate, FinancialReport } from '../utils/api';
 
-interface RegionalTax {
+dotenv.config();
+
+export interface RegionalTax {
   region: string;
   environmentalTax: number;
   customsDuty: number;
 }
 
-// In-memory data store
-let users: User[] = [
-  {
-    id: "user-1",
-    name: "Тестовый Пользователь",
-    email: "test@example.com",
-    companyName: "Тест Ком",
-    inn: "1234567890",
-    kpp: "098765432",
-    billingAddress: "г. Тест, ул. Тестовая, д.1",
-    dashboardSettings: JSON.stringify([
-      { id: 'w1', type: 'totalOrders', position: 0, size: 'small' },
-      { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
-      { id: 'w3', type: 'environmentalImpact', position: 2, size: 'small' },
-    ]),
-    isAdmin: false,
-  },
-  {
-    id: "admin-1",
-    name: "Администратор",
-    email: "admin@example.com",
-    companyName: "Эко Трэк",
-    isAdmin: true,
-    dashboardSettings: JSON.stringify([
-      { id: 'w1', type: 'totalOrders', position: 0, size: 'large' },
-      { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
-    ]),
-  }
-];
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 
-let orders: Order[] = [
-  {
-    id: "order-1",
-    userId: "user-1",
-    materialType: "PET",
-    volume: 500,
-    pickupAddress: "г. Москва, ул. Тверская, д.1",
-    price: 12500,
-    status: "completed",
-    paymentStatus: "paid",
-    environmentalImpact: 750,
-    createdAt: new Date("2023-01-10"),
-    updatedAt: new Date("2023-01-15"),
-  },
-  {
-    id: "order-2",
-    userId: "user-1",
-    materialType: "HDPE",
-    volume: 300,
-    pickupAddress: "г. Москва, ул. Ленина, д.15",
-    price: 9000,
-    status: "in_progress",
-    paymentStatus: "pending",
-    environmentalImpact: 450,
-    createdAt: new Date("2023-02-05"),
-    updatedAt: new Date("2023-02-10"),
-  },
-];
+const toSnake = (str: string) => str.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
 
-let marketRates: MarketRate[] = [
-  {
-    id: "rate-1",
-    materialType: "PET",
-    pricePerKg: 25,
-    logisticsCostPerKm: 15
-  },
-  {
-    id: "rate-2",
-    materialType: "HDPE",
-    pricePerKg: 30,
-    logisticsCostPerKm: 17.5
-  },
-];
-
-let regionalTaxes: RegionalTax[] = [
-  { region: "Москва", environmentalTax: 0.5, customsDuty: 200 },
-  { region: "Санкт-Петербург", environmentalTax: 0.4, customsDuty: 180 },
-  { region: "Екатеринбург", environmentalTax: 0.3, customsDuty: 150 },
-  { region: "Новосибирск", environmentalTax: 0.35, customsDuty: 160 },
-  { region: "По умолчанию", environmentalTax: 0.25, customsDuty: 100 }
-];
-
-// Инициализация массива финансовых отчетов с примерами данных
-let financialReports: FinancialReport[] = [
-  {
-    id: "report-2023-1",
-    month: 1,
-    year: 2023,
-    totalPaid: 45000,
-    volume: 1800,
-    monthName: 'Январь'
-  },
-  {
-    id: "report-2023-2",
-    month: 2,
-    year: 2023,
-    totalPaid: 38000,
-    volume: 1500,
-    monthName: 'Февраль'
-  }
-];
-
-// Database interface
 export const db = {
+  pool,
   // User operations
   user: {
-    findUnique: async (query: { where: { id?: string; email?: string } }) => {
+    findUnique: async (query: { where: { id?: string; email?: string } }): Promise<User | null> => {
       if (query.where.id) {
-        return users.find(u => u.id === query.where.id) || null;
+        const res = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [query.where.id]);
+        return res.rows[0] || null;
       }
       if (query.where.email) {
-        return users.find(u => u.email === query.where.email) || null;
+        const res = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [query.where.email]);
+        return res.rows[0] || null;
       }
       return null;
     },
-    findMany: async () => {
-      return [...users];
+    findMany: async (): Promise<User[]> => {
+      const res = await pool.query('SELECT * FROM users');
+      return res.rows;
     },
-    create: async (data: Omit<User, 'id'>) => {
-      const newUser: User = {
-        ...data,
-        id: `user-${Date.now()}`,
-      };
-      users.push(newUser);
-      return newUser;
+    create: async (data: Omit<User, "id">): Promise<User> => {
+      const id = randomUUID();
+      const res = await pool.query(
+        `INSERT INTO users (id, name, email, company_name, inn, kpp, billing_address, is_admin, dashboard_settings)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [id, data.name, data.email, data.companyName || null, data.inn || null, data.kpp || null, data.billingAddress || null, data.isAdmin, data.dashboardSettings]
+      );
+      return res.rows[0];
     },
-    update: async (query: { where: { id: string }; data: Partial<User> }) => {
-      const userIndex = users.findIndex(u => u.id === query.where.id);
-      if (userIndex === -1) {
-        throw new Error(`User not found: ${query.where.id}`);
+    update: async (query: { where: { id: string }; data: Partial<User> }): Promise<User> => {
+      const fields = Object.keys(query.data);
+      if (fields.length === 0) {
+        const res = await pool.query('SELECT * FROM users WHERE id=$1', [query.where.id]);
+        if (!res.rows[0]) throw new Error(`User not found: ${query.where.id}`);
+        return res.rows[0];
       }
-      
-      users[userIndex] = {
-        ...users[userIndex],
-        ...query.data,
-      };
-      
-      return users[userIndex];
+      const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+      const values = fields.map(f => (query.data as any)[f]);
+      values.push(query.where.id);
+      const res = await pool.query(`UPDATE users SET ${sets} WHERE id=$${values.length} RETURNING *`, values);
+      if (!res.rows[0]) throw new Error(`User not found: ${query.where.id}`);
+      return res.rows[0];
     },
-    delete: async (query: { where: { id: string } }) => {
-      const userIndex = users.findIndex(u => u.id === query.where.id);
-      if (userIndex === -1) {
-        throw new Error(`User not found: ${query.where.id}`);
-      }
-      
-      const deletedUser = users[userIndex];
-      users.splice(userIndex, 1);
-      
-      return deletedUser;
-    }
+    delete: async (query: { where: { id: string } }): Promise<User> => {
+      const res = await pool.query('DELETE FROM users WHERE id=$1 RETURNING *', [query.where.id]);
+      if (!res.rows[0]) throw new Error(`User not found: ${query.where.id}`);
+      return res.rows[0];
+    },
   },
-  
+
   // Order operations
   order: {
-    findMany: async (query?: { where?: { userId?: string }; orderBy?: { createdAt: 'desc' | 'asc' }; include?: {user?: boolean} }) => {
-      let result = [...orders];
-      if (query && query.where && query.where.userId) {
-        result = result.filter(o => o.userId === query.where.userId);
+    findMany: async (query?: { where?: { userId?: string }; orderBy?: { createdAt: 'desc' | 'asc' }; include?: { user?: boolean } }): Promise<any[]> => {
+      let sql = 'SELECT o.*';
+      if (query?.include?.user) {
+        sql += ', u.* as user';
       }
-      if (query && query.orderBy && typeof query.orderBy.createdAt === 'string') {
-        result.sort((a, b) => {
-          const dateA = new Date(a.createdAt).getTime();
-          const dateB = new Date(b.createdAt).getTime();
-          return query.orderBy.createdAt === 'desc' ? dateB - dateA : dateA - dateB;
-        });
+      sql += ' FROM orders o';
+      const values: any[] = [];
+      if (query?.include?.user) {
+        sql += ' JOIN users u ON o.user_id = u.id';
       }
-      if (query && query.include && query.include.user) {
-        result = result.map(order => {
-          const user = users.find(u => u.id === order.userId);
-          return { ...order, user };
-        });
+      if (query?.where?.userId) {
+        values.push(query.where.userId);
+        sql += ` WHERE o.user_id = $${values.length}`;
       }
-      return result;
+      if (query?.orderBy?.createdAt) {
+        sql += ` ORDER BY o.created_at ${query.orderBy.createdAt.toUpperCase()}`;
+      }
+      const res = await pool.query(sql, values);
+      return res.rows;
     },
-    findUnique: async (query: { where: { id: string } }) => {
-      const order = orders.find(o => o.id === query.where.id) || null;
-      return order;
+    findUnique: async (query: { where: { id: string } }): Promise<Order | null> => {
+      const res = await pool.query('SELECT * FROM orders WHERE id=$1', [query.where.id]);
+      return res.rows[0] || null;
     },
-    create: async (data: Omit<Order, 'id' | 'createdAt' | 'updatedAt'>) => {
-      const newOrder: Order = {
-        ...data,
-        id: `order-${Date.now()}`,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      orders.push(newOrder);
-      return newOrder;
+    create: async (data: Omit<Order, 'id' | 'createdAt' | 'updatedAt'>): Promise<Order> => {
+      const id = randomUUID();
+      const res = await pool.query(
+        `INSERT INTO orders (id, user_id, material_type, volume, pickup_address, price, status, payment_status, environmental_impact, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW()) RETURNING *`,
+        [id, data.userId, data.materialType, data.volume, data.pickupAddress, data.price, data.status, data.paymentStatus || null, data.environmentalImpact || 0]
+      );
+      return res.rows[0];
     },
-    update: async (query: { where: { id: string }; data: Partial<Order> }) => {
-      const orderIndex = orders.findIndex(o => o.id === query.where.id);
-      if (orderIndex === -1) {
-        throw new Error(`Order not found: ${query.where.id}`);
+    update: async (query: { where: { id: string }; data: Partial<Order> }): Promise<Order> => {
+      const fields = Object.keys(query.data);
+      if (fields.length === 0) {
+        const res = await pool.query('SELECT * FROM orders WHERE id=$1', [query.where.id]);
+        if (!res.rows[0]) throw new Error(`Order not found: ${query.where.id}`);
+        return res.rows[0];
       }
-      
-      orders[orderIndex] = {
-        ...orders[orderIndex],
-        ...query.data,
-        updatedAt: new Date(),
-      };
-      
-      return orders[orderIndex];
+      const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+      const values = fields.map(f => (query.data as any)[f]);
+      values.push(query.where.id);
+      const res = await pool.query(`UPDATE orders SET ${sets}, updated_at=NOW() WHERE id=$${values.length} RETURNING *`, values);
+      if (!res.rows[0]) throw new Error(`Order not found: ${query.where.id}`);
+      return res.rows[0];
     },
-    delete: async (query: { where: { id: string } }) => {
-      const orderIndex = orders.findIndex(o => o.id === query.where.id);
-      if (orderIndex === -1) {
-        throw new Error(`Order not found: ${query.where.id}`);
-      }
-      
-      const deletedOrder = orders[orderIndex];
-      orders.splice(orderIndex, 1);
-      
-      return deletedOrder;
+    delete: async (query: { where: { id: string } }): Promise<Order> => {
+      const res = await pool.query('DELETE FROM orders WHERE id=$1 RETURNING *', [query.where.id]);
+      if (!res.rows[0]) throw new Error(`Order not found: ${query.where.id}`);
+      return res.rows[0];
     },
     updateMany: async (query: { where: { id: string }; data: Partial<Order> }) => {
       return db.order.update(query);
-    }
+    },
   },
-  
+
   // Market rate operations
   marketRate: {
-    findMany: async () => {
-      return [...marketRates];
+    findMany: async (): Promise<MarketRate[]> => {
+      const res = await pool.query('SELECT * FROM market_rates');
+      return res.rows;
     },
-    findFirst: async (query: { where: { materialType: string } }) => {
-      return marketRates.find(r => r.materialType === query.where.materialType) || null;
+    findFirst: async (query: { where: { materialType: string } }): Promise<MarketRate | null> => {
+      const res = await pool.query('SELECT * FROM market_rates WHERE material_type=$1 LIMIT 1', [query.where.materialType]);
+      return res.rows[0] || null;
     },
-    updateMany: async (query: { where: { materialType: string }; data: Partial<MarketRate> }) => {
-      const rateIndex = marketRates.findIndex(r => r.materialType === query.where.materialType);
-      if (rateIndex === -1) {
-        throw new Error(`Market rate not found: ${query.where.materialType}`);
+    updateMany: async (query: { where: { materialType: string }; data: Partial<MarketRate> }): Promise<MarketRate> => {
+      const fields = Object.keys(query.data);
+      const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
+      const values = fields.map(f => (query.data as any)[f]);
+      values.push(query.where.materialType);
+      const res = await pool.query(`UPDATE market_rates SET ${sets} WHERE material_type=$${values.length} RETURNING *`, values);
+      if (!res.rows[0]) throw new Error(`Market rate not found: ${query.where.materialType}`);
+      return res.rows[0];
+    },
+    createMany: async (query: { data: Omit<MarketRate, 'id'>[] }): Promise<MarketRate[]> => {
+      const result: MarketRate[] = [];
+      for (const rate of query.data) {
+        const id = randomUUID();
+        const res = await pool.query(
+          `INSERT INTO market_rates (id, material_type, price_per_kg, logistics_cost_per_km)
+           VALUES ($1,$2,$3,$4) RETURNING *`,
+          [id, rate.materialType, rate.pricePerKg, (rate as any).logisticsCostPerKm]
+        );
+        result.push(res.rows[0]);
       }
-      
-      marketRates[rateIndex] = {
-        ...marketRates[rateIndex],
-        ...query.data,
-      };
-      
-      return marketRates[rateIndex];
-    },
-    createMany: async (query: { data: Omit<MarketRate, 'id'>[] }) => {
-      const newRates = query.data.map(rate => ({
-        ...rate,
-        id: `rate-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      }));
-      
-      marketRates.push(...newRates);
-      return newRates;
-    }
-  },
-  
-  // Regional tax operations
-  regionalTax: {
-    findMany: async () => {
-      return [...regionalTaxes];
-    },
-    findFirst: async (query: { where: { region: string } }) => {
-      return regionalTaxes.find(t => t.region === query.where.region) ||
-             regionalTaxes.find(t => t.region === "По умолчанию") || null;
-    },
-    createMany: async (query: { data: RegionalTax[] }) => {
-      regionalTaxes.push(...query.data);
-      return query.data;
-    }
-  },
-  
-  // Financial report operations
-  financialReport: {
-    findMany: async (query?: { where?: { year: number; month?: number } }) => {
-      let result = [...financialReports];
-      
-      if (query && query.where) {
-        if (query.where.year) {
-          result = result.filter(r => r.year === query.where.year);
-        }
-        if (query.where.month) {
-          result = result.filter(r => r.month === query.where.month);
-        }
-      }
-      
       return result;
     },
-    findUnique: async (query: { where: { id: string } }) => {
-      return financialReports.find(r => r.id === query.where.id) || null;
+  },
+
+  // Regional tax operations
+  regionalTax: {
+    findMany: async (): Promise<RegionalTax[]> => {
+      const res = await pool.query('SELECT * FROM regional_taxes');
+      return res.rows;
     },
-    create: async (data: Omit<FinancialReport, 'id'>) => {
-      const newReport: FinancialReport = {
-        ...data,
-        id: `report-${data.year}-${data.month}`,
-      };
-      
-      // Check if report already exists
-      const existingIndex = financialReports.findIndex(
-        r => r.year === data.year && r.month === data.month
-      );
-      
-      if (existingIndex !== -1) {
-        financialReports[existingIndex] = newReport;
-      } else {
-        financialReports.push(newReport);
+    findFirst: async (query: { where: { region: string } }): Promise<RegionalTax | null> => {
+      const res = await pool.query('SELECT * FROM regional_taxes WHERE region=$1 LIMIT 1', [query.where.region]);
+      if (res.rows[0]) return res.rows[0];
+      const def = await pool.query('SELECT * FROM regional_taxes WHERE region=$1 LIMIT 1', ['По умолчанию']);
+      return def.rows[0] || null;
+    },
+    createMany: async (query: { data: RegionalTax[] }): Promise<RegionalTax[]> => {
+      const inserted: RegionalTax[] = [];
+      for (const t of query.data) {
+        const res = await pool.query(
+          `INSERT INTO regional_taxes (region, environmental_tax, customs_duty)
+           VALUES ($1,$2,$3) RETURNING *`,
+          [t.region, t.environmentalTax, t.customsDuty]
+        );
+        inserted.push(res.rows[0]);
       }
-      
-      return newReport;
-    }
-  }
-}; 
+      return inserted;
+    },
+  },
+
+  // Financial report operations
+  financialReport: {
+    findMany: async (query?: { where?: { year: number; month?: number } }): Promise<FinancialReport[]> => {
+      let sql = 'SELECT * FROM financial_reports';
+      const values: any[] = [];
+      const conditions: string[] = [];
+      if (query?.where?.year) {
+        values.push(query.where.year);
+        conditions.push(`year=$${values.length}`);
+      }
+      if (query?.where?.month !== undefined) {
+        values.push(query.where.month);
+        conditions.push(`month=$${values.length}`);
+      }
+      if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+      const res = await pool.query(sql, values);
+      return res.rows;
+    },
+    findUnique: async (query: { where: { id: string } }): Promise<FinancialReport | null> => {
+      const res = await pool.query('SELECT * FROM financial_reports WHERE id=$1', [query.where.id]);
+      return res.rows[0] || null;
+    },
+    create: async (data: Omit<FinancialReport, 'id'>): Promise<FinancialReport> => {
+      const id = `report-${data.year}-${data.month}`;
+      const res = await pool.query(
+        `INSERT INTO financial_reports (id, month, year, total_paid, volume, month_name)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (id) DO UPDATE SET
+           total_paid=EXCLUDED.total_paid,
+           volume=EXCLUDED.volume,
+           month_name=EXCLUDED.month_name
+         RETURNING *`,
+        [id, data.month, data.year, data.totalPaid, data.volume, data.monthName]
+      );
+      return res.rows[0];
+    },
+  },
+};
