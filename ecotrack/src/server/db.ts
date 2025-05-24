@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { randomUUID } from 'crypto';
+import { randomUUID, createCipheriv, createDecipheriv, scryptSync } from 'crypto';
 import dotenv from 'dotenv';
 import { User, Order, MarketRate, FinancialReport } from '../utils/api';
 
@@ -15,6 +15,22 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+// Simple AES-256-CTR helpers for encrypting sensitive user data
+const ENC_ALGO = 'aes-256-ctr';
+const ENC_KEY = scryptSync(process.env.ENCRYPTION_KEY || 'default_secret_key', 'salt', 32);
+const ENC_IV = Buffer.alloc(16, 0);
+
+const encrypt = (text: string): string => {
+  const cipher = createCipheriv(ENC_ALGO, ENC_KEY, ENC_IV);
+  return Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]).toString('hex');
+};
+
+const decrypt = (data?: string | null): string | null => {
+  if (!data) return null;
+  const decipher = createDecipheriv(ENC_ALGO, ENC_KEY, ENC_IV);
+  return Buffer.concat([decipher.update(Buffer.from(data, 'hex')), decipher.final()]).toString('utf8');
+};
+
 const toSnake = (str: string) => str.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
 
 export const db = {
@@ -22,42 +38,78 @@ export const db = {
   // User operations
   user: {
     findUnique: async (query: { where: { id?: string; email?: string } }): Promise<User | null> => {
+      let res;
       if (query.where.id) {
-        const res = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [query.where.id]);
-        return res.rows[0] || null;
+        res = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [query.where.id]);
+      } else if (query.where.email) {
+        res = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [query.where.email]);
+      } else {
+        return null;
       }
-      if (query.where.email) {
-        const res = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [query.where.email]);
-        return res.rows[0] || null;
-      }
-      return null;
+      const row = res.rows[0];
+      if (!row) return null;
+      row.inn = decrypt(row.inn);
+      row.kpp = decrypt(row.kpp);
+      row.billing_address = decrypt(row.billing_address);
+      return row;
     },
     findMany: async (): Promise<User[]> => {
       const res = await pool.query('SELECT * FROM users');
-      return res.rows;
+      return res.rows.map(r => {
+        r.inn = decrypt(r.inn);
+        r.kpp = decrypt(r.kpp);
+        r.billing_address = decrypt(r.billing_address);
+        return r;
+      });
     },
     create: async (data: Omit<User, "id">): Promise<User> => {
       const id = randomUUID();
       const res = await pool.query(
-        `INSERT INTO users (id, name, email, company_name, inn, kpp, billing_address, is_admin, dashboard_settings)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [id, data.name, data.email, data.companyName || null, data.inn || null, data.kpp || null, data.billingAddress || null, data.isAdmin, data.dashboardSettings]
+        `INSERT INTO users (id, name, email, password_hash, totp_secret, company_name, inn, kpp, billing_address, is_admin, dashboard_settings)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [
+          id,
+          data.name,
+          data.email,
+          data.passwordHash || null,
+          data.totpSecret || null,
+          data.companyName || null,
+          data.inn ? encrypt(data.inn) : null,
+          data.kpp ? encrypt(data.kpp) : null,
+          data.billingAddress ? encrypt(data.billingAddress) : null,
+          data.isAdmin,
+          data.dashboardSettings,
+        ]
       );
-      return res.rows[0];
+      const row = res.rows[0];
+      if (row) {
+        row.inn = decrypt(row.inn);
+        row.kpp = decrypt(row.kpp);
+        row.billing_address = decrypt(row.billing_address);
+      }
+      return row;
     },
     update: async (query: { where: { id: string }; data: Partial<User> }): Promise<User> => {
-      const fields = Object.keys(query.data);
+      const data = { ...query.data } as any;
+      if (data.inn) data.inn = encrypt(data.inn);
+      if (data.kpp) data.kpp = encrypt(data.kpp);
+      if (data.billingAddress) data.billingAddress = encrypt(data.billingAddress);
+      const fields = Object.keys(data);
       if (fields.length === 0) {
         const res = await pool.query('SELECT * FROM users WHERE id=$1', [query.where.id]);
         if (!res.rows[0]) throw new Error(`User not found: ${query.where.id}`);
         return res.rows[0];
       }
       const sets = fields.map((f, i) => `${toSnake(f)}=$${i + 1}`).join(', ');
-      const values = fields.map(f => (query.data as any)[f]);
+      const values = fields.map(f => data[f]);
       values.push(query.where.id);
       const res = await pool.query(`UPDATE users SET ${sets} WHERE id=$${values.length} RETURNING *`, values);
       if (!res.rows[0]) throw new Error(`User not found: ${query.where.id}`);
-      return res.rows[0];
+      const row = res.rows[0];
+      row.inn = decrypt(row.inn);
+      row.kpp = decrypt(row.kpp);
+      row.billing_address = decrypt(row.billing_address);
+      return row;
     },
     delete: async (query: { where: { id: string } }): Promise<User> => {
       const res = await pool.query('DELETE FROM users WHERE id=$1 RETURNING *', [query.where.id]);
@@ -220,6 +272,26 @@ export const db = {
         [id, data.month, data.year, data.totalPaid, data.volume, data.monthName]
       );
       return res.rows[0];
+    },
+  },
+
+  // Session operations
+  session: {
+    create: async (data: { token: string; userId: string; expiresAt: Date; role: string }) => {
+      await pool.query(
+        'INSERT INTO sessions (token, user_id, expires_at, role) VALUES ($1,$2,$3,$4)',
+        [data.token, data.userId, data.expiresAt, data.role]
+      );
+    },
+    findByToken: async (token: string): Promise<{ token: string; user_id: string; expires_at: Date; role: string } | null> => {
+      const res = await pool.query('SELECT * FROM sessions WHERE token=$1 LIMIT 1', [token]);
+      return res.rows[0] || null;
+    },
+    deleteByToken: async (token: string) => {
+      await pool.query('DELETE FROM sessions WHERE token=$1', [token]);
+    },
+    deleteExpired: async () => {
+      await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
     },
   },
 };

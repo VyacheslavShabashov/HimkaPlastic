@@ -26,8 +26,8 @@ interface PriceParams {
 }
 
 // Authentication handlers
-export const signIn = async (email: string, password: string) => {
-  return authSignIn(email, password);
+export const signIn = async (email: string, password: string, totp?: string) => {
+  return authSignIn(email, password, totp);
 };
 
 export const signUp = async (userData: { email: string; password: string; name: string; companyName?: string }) => {

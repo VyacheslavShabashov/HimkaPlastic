@@ -1,8 +1,10 @@
 // Server actions for authentication, user management, and communications
 import { db } from "./db";
 import { User } from "../utils/api";
+import bcrypt from 'bcryptjs';
+import speakeasy from 'speakeasy';
 
-// Store active sessions in memory (in a real app, use Redis or a database)
+// Session information stored in the database
 interface Session {
   userId: string;
   token: string;
@@ -10,51 +12,31 @@ interface Session {
   role: 'client' | 'manager' | 'logistic' | 'admin';
 }
 
-// In-memory store for user sessions
-const sessions: Session[] = [
-  // Add a default session for development
-  {
-    userId: "user-1",
-    token: "test-token-for-development",
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
-    role: 'client'
-  },
-  {
-    userId: "admin-1",
-    token: "admin-token-for-development",
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
-    role: 'admin'
-  }
-];
-
 // Authentication actions
 export const getAuth = async (token?: string) => {
-  // For development, return a default authenticated user if no token is provided
   if (!token && process.env.NODE_ENV === 'development') {
     return {
       userId: "user-1",
       status: "authenticated" as const,
-      role: 'client' as const
+      role: 'client' as const,
     };
   }
 
-  // Find session by token
-  const session = sessions.find(s => s.token === token);
-  
-  // Check if session exists and is not expired
-  if (session && new Date() < session.expiresAt) {
+  if (!token) {
+    return { userId: null, status: 'unauthenticated' as const, role: null };
+  }
+
+  await db.session.deleteExpired();
+  const session = await db.session.findByToken(token);
+  if (session) {
     return {
-      userId: session.userId,
-      status: "authenticated" as const,
-      role: session.role
+      userId: session.user_id,
+      status: 'authenticated' as const,
+      role: session.role as Session['role'],
     };
   }
-  
-  return {
-    userId: null,
-    status: "unauthenticated" as const,
-    role: null
-  };
+
+  return { userId: null, status: 'unauthenticated' as const, role: null };
 };
 
 // Email sending action
@@ -77,18 +59,23 @@ export const sendEmail = async (options: {
 };
 
 // Authentication and user management functions
-export const signIn = async (email: string, password: string): Promise<{token: string, user: User, role: string}> => {
-  // In a real app, you would validate credentials against hashed passwords
-  // For now, we'll just check if a user with this email exists
+export const signIn = async (email: string, password: string, totp?: string): Promise<{token: string, user: User, role: string}> => {
+  await db.session.deleteExpired();
   const user = await db.user.findUnique({
     where: { email }
   });
-  
-  if (!user) {
+
+  const passwordHash = (user as any)?.passwordHash || (user as any)?.password_hash;
+
+  if (!user || !passwordHash || !(await bcrypt.compare(password, passwordHash))) {
     throw new Error("Invalid credentials");
   }
-  
-  // Generate a token
+
+  const secret = (user as any).totpSecret || (user as any).totp_secret;
+  if (secret && !speakeasy.totp.verify({ secret, encoding: 'base32', token: totp || '' })) {
+    throw new Error('Invalid verification code');
+  }
+
   const token = `token_${Math.random().toString(36).substring(2, 15)}`;
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
   
@@ -102,22 +89,8 @@ export const signIn = async (email: string, password: string): Promise<{token: s
     role = 'logistic';
   }
   
-  // Create session
-  const session: Session = {
-    userId: user.id,
-    token,
-    expiresAt,
-    role
-  };
-  
-  // Remove any existing sessions for this user
-  const existingSessionIndex = sessions.findIndex(s => s.userId === user.id);
-  if (existingSessionIndex !== -1) {
-    sessions.splice(existingSessionIndex, 1);
-  }
-  
-  // Add new session
-  sessions.push(session);
+  const session: Session = { userId: user.id, token, expiresAt, role };
+  await db.session.create(session);
   
   return { token, user, role };
 };
@@ -137,11 +110,13 @@ export const signUp = async (userData: {
     throw new Error("Email already in use");
   }
   
-  // In a real app, you would hash the password before storing
-  // For now, we'll skip password storage for simplicity
+  const passwordHash = await bcrypt.hash(userData.password, 10);
+  const totpSecret = speakeasy.generateSecret({ length: 20 }).base32;
   const newUser = await db.user.create({
     name: userData.name,
     email: userData.email,
+    passwordHash,
+    totpSecret,
     companyName: userData.companyName || "",
     isAdmin: false,
     dashboardSettings: JSON.stringify([
@@ -172,17 +147,14 @@ export const signUp = async (userData: {
     expiresAt,
     role
   };
-  
-  sessions.push(session);
-  
+
+  await db.session.create(session);
+
   return { token, user: newUser, role };
 };
 
-export const signOut = (token: string): void => {
-  const sessionIndex = sessions.findIndex(s => s.token === token);
-  if (sessionIndex !== -1) {
-    sessions.splice(sessionIndex, 1);
-  }
+export const signOut = async (token: string): Promise<void> => {
+  await db.session.deleteByToken(token);
 };
 
 // Helper functions for API
