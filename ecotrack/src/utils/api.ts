@@ -38,6 +38,15 @@ export interface User {
   inn?: string;
   kpp?: string;
   billingAddress?: string;
+  /**
+   * Hashed password for authentication. Optional because the client
+   * never receives it from the server.
+   */
+  passwordHash?: string;
+  /**
+   * Secret used for TOTP multi‑factor authentication.
+   */
+  totpSecret?: string;
   isAdmin: boolean;
   dashboardSettings: string; // JSON строка с настройками
 }
