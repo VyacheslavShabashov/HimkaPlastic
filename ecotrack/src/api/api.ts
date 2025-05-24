@@ -26,8 +26,8 @@ interface PriceParams {
 }
 
 // Authentication handlers
-export const signIn = async (email: string, password: string) => {
-  return authSignIn(email, password);
+export const signIn = async (email: string, password: string, mfaCode?: string) => {
+  return authSignIn(email, password, mfaCode);
 };
 
 export const signUp = async (userData: { email: string; password: string; name: string; companyName?: string }) => {
@@ -109,7 +109,7 @@ export async function updateMarketRate(input: {
 // }
 
 // Helper function to calculate distance from address - заменяем на новую функцию
-async function getDistanceFromAddress(address: string): Promise<number> {
+async function getDistanceFromAddress(address: string) {
   try {
     // Используем адрес завода ООО Химка пластик как точку отсчета
     return await calculateDistance(HIMKA_PLASTIC_ADDRESS, address);
@@ -183,7 +183,7 @@ export async function calculateOrderPrice(orderData: PriceParams): Promise<Price
   const basePrice = orderData.volume * materialRate.pricePerKg;
 
   // Get distance based on pickup address using Yandex Maps API
-  const distance = orderData.distance || await getDistanceFromAddress(orderData.pickupAddress);
+  const distance = orderData.distance ?? (await getDistanceFromAddress(orderData.pickupAddress)) ?? 0;
 
   // Используем фиксированную ставку 63 рубля за км для расчета логистики
   const LOGISTICS_COST_PER_KM = 63;

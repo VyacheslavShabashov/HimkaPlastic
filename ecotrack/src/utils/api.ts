@@ -40,6 +40,8 @@ export interface User {
   billingAddress?: string;
   isAdmin: boolean;
   dashboardSettings: string; // JSON строка с настройками
+  passwordHash?: string;
+  mfaSecret?: string;
 }
 
 export interface Order {
@@ -107,12 +109,10 @@ export async function calculateDistance(fromAddress: string, toAddress: string):
       },
     });
 
-    const distance = response.data?.routes?.[0]?.legs?.[0]?.distance?.value;
-
-    if (typeof distance !== 'number') {
+    const distance: number = Number(response.data?.routes?.[0]?.legs?.[0]?.distance?.value);
+    if (!Number.isFinite(distance)) {
       throw new Error('Distance value is missing or invalid');
     }
-
     return distance / 1000; // Convert meters to kilometers
   } catch (error) {
     console.error('Error calculating distance:', error);

@@ -1,6 +1,9 @@
 // Server actions for authentication, user management, and communications
 import { db } from "./db";
 import { User } from "../utils/api";
+import { loadJson, saveJson } from "./storage";
+import { hashPassword, verifyPassword, generateMfaSecret, verifyTotp } from "./authUtils";
+import crypto from "crypto";
 
 // Store active sessions in memory (in a real app, use Redis or a database)
 interface Session {
@@ -10,22 +13,26 @@ interface Session {
   role: 'client' | 'manager' | 'logistic' | 'admin';
 }
 
-// In-memory store for user sessions
-const sessions: Session[] = [
-  // Add a default session for development
+const defaultSessions: Session[] = [
   {
-    userId: "user-1",
-    token: "test-token-for-development",
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+    userId: 'user-1',
+    token: 'test-token-for-development',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     role: 'client'
   },
   {
-    userId: "admin-1",
-    token: "admin-token-for-development",
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+    userId: 'admin-1',
+    token: 'admin-token-for-development',
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     role: 'admin'
   }
 ];
+
+let sessions: Session[] = loadJson<Session[]>('sessions.json', defaultSessions).map(s => ({ ...s, expiresAt: new Date(s.expiresAt) }));
+
+function saveSessions() {
+  saveJson('sessions.json', sessions);
+}
 
 // Authentication actions
 export const getAuth = async (token?: string) => {
@@ -40,7 +47,7 @@ export const getAuth = async (token?: string) => {
 
   // Find session by token
   const session = sessions.find(s => s.token === token);
-  
+
   // Check if session exists and is not expired
   if (session && new Date() < session.expiresAt) {
     return {
@@ -48,6 +55,9 @@ export const getAuth = async (token?: string) => {
       status: "authenticated" as const,
       role: session.role
     };
+  } else if (session) {
+    sessions.splice(sessions.indexOf(session), 1);
+    saveSessions();
   }
   
   return {
@@ -77,19 +87,27 @@ export const sendEmail = async (options: {
 };
 
 // Authentication and user management functions
-export const signIn = async (email: string, password: string): Promise<{token: string, user: User, role: string}> => {
-  // In a real app, you would validate credentials against hashed passwords
-  // For now, we'll just check if a user with this email exists
+export const signIn = async (
+  email: string,
+  password: string,
+  mfaCode?: string
+): Promise<{ token: string; user: User; role: string }> => {
   const user = await db.user.findUnique({
-    where: { email }
+    where: { email },
   });
-  
-  if (!user) {
-    throw new Error("Invalid credentials");
+
+  if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    throw new Error('Invalid credentials');
+  }
+
+  if (user.mfaSecret) {
+    if (!mfaCode || !verifyTotp(user.mfaSecret, mfaCode)) {
+      throw new Error('Invalid MFA code');
+    }
   }
   
   // Generate a token
-  const token = `token_${Math.random().toString(36).substring(2, 15)}`;
+  const token = crypto.randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
   
   // Determine role based on user data
@@ -118,8 +136,13 @@ export const signIn = async (email: string, password: string): Promise<{token: s
   
   // Add new session
   sessions.push(session);
-  
-  return { token, user, role };
+  saveSessions();
+
+  const safeUser = { ...user } as User;
+  delete (safeUser as any).passwordHash;
+  delete (safeUser as any).mfaSecret;
+
+  return { token, user: safeUser, role };
 };
 
 export const signUp = async (userData: {
@@ -127,7 +150,7 @@ export const signUp = async (userData: {
   password: string;
   name: string;
   companyName?: string;
-}): Promise<{token: string, user: User, role: string}> => {
+}): Promise<{token: string, user: User, role: string, mfaSecret: string}> => {
   // Check if user already exists
   const existingUser = await db.user.findUnique({
     where: { email: userData.email }
@@ -137,13 +160,15 @@ export const signUp = async (userData: {
     throw new Error("Email already in use");
   }
   
-  // In a real app, you would hash the password before storing
-  // For now, we'll skip password storage for simplicity
+  const passwordHash = hashPassword(userData.password);
+  const mfaSecret = generateMfaSecret();
   const newUser = await db.user.create({
     name: userData.name,
     email: userData.email,
     companyName: userData.companyName || "",
     isAdmin: false,
+    passwordHash,
+    mfaSecret,
     dashboardSettings: JSON.stringify([
       { id: 'w1', type: 'totalOrders', position: 0, size: 'small' },
       { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
@@ -152,7 +177,7 @@ export const signUp = async (userData: {
   });
   
   // Generate a token and create session
-  const token = `token_${Math.random().toString(36).substring(2, 15)}`;
+  const token = crypto.randomBytes(16).toString('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
   
   // Determine role based on email domain
@@ -172,16 +197,21 @@ export const signUp = async (userData: {
     expiresAt,
     role
   };
-  
+
   sessions.push(session);
-  
-  return { token, user: newUser, role };
+  saveSessions();
+
+  const safeUser = { ...newUser } as User;
+  delete (safeUser as any).passwordHash;
+
+  return { token, user: safeUser, role, mfaSecret };
 };
 
 export const signOut = (token: string): void => {
   const sessionIndex = sessions.findIndex(s => s.token === token);
   if (sessionIndex !== -1) {
     sessions.splice(sessionIndex, 1);
+    saveSessions();
   }
 };
 

@@ -1,5 +1,7 @@
 // In-memory database implementation
 import { User, Order, MarketRate, FinancialReport } from '../utils/api';
+import { loadEncryptedJson, saveEncryptedJson } from './storage';
+import { hashPassword, generateMfaSecret } from './authUtils';
 
 interface RegionalTax {
   region: string;
@@ -8,7 +10,7 @@ interface RegionalTax {
 }
 
 // In-memory data store
-let users: User[] = [
+const defaultUsers: User[] = [
   {
     id: "user-1",
     name: "Тестовый Пользователь",
@@ -23,6 +25,8 @@ let users: User[] = [
       { id: 'w3', type: 'environmentalImpact', position: 2, size: 'small' },
     ]),
     isAdmin: false,
+    passwordHash: hashPassword('password'),
+    mfaSecret: generateMfaSecret(),
   },
   {
     id: "admin-1",
@@ -34,8 +38,16 @@ let users: User[] = [
       { id: 'w1', type: 'totalOrders', position: 0, size: 'large' },
       { id: 'w2', type: 'totalEarnings', position: 1, size: 'small' },
     ]),
+    passwordHash: hashPassword('admin'),
+    mfaSecret: generateMfaSecret(),
   }
 ];
+
+let users: User[] = loadEncryptedJson<User[]>('users.enc', defaultUsers);
+
+function saveUsers() {
+  saveEncryptedJson('users.enc', users);
+}
 
 let orders: Order[] = [
   {
@@ -131,6 +143,7 @@ export const db = {
         id: `user-${Date.now()}`,
       };
       users.push(newUser);
+      saveUsers();
       return newUser;
     },
     update: async (query: { where: { id: string }; data: Partial<User> }) => {
@@ -143,7 +156,9 @@ export const db = {
         ...users[userIndex],
         ...query.data,
       };
-      
+
+      saveUsers();
+
       return users[userIndex];
     },
     delete: async (query: { where: { id: string } }) => {
@@ -154,26 +169,28 @@ export const db = {
       
       const deletedUser = users[userIndex];
       users.splice(userIndex, 1);
-      
+
+      saveUsers();
+
       return deletedUser;
     }
   },
   
   // Order operations
   order: {
-    findMany: async (query?: { where?: { userId?: string }; orderBy?: { createdAt: 'desc' | 'asc' }; include?: {user?: boolean} }) => {
+    findMany: async (query?: { where?: { userId?: string }; orderBy?: { createdAt: 'desc' | 'asc' }; include?: { user?: boolean } }) => {
       let result = [...orders];
-      if (query && query.where && query.where.userId) {
-        result = result.filter(o => o.userId === query.where.userId);
+      if (query?.where?.userId) {
+        result = result.filter(o => o.userId === query.where!.userId);
       }
-      if (query && query.orderBy && typeof query.orderBy.createdAt === 'string') {
+      if (query?.orderBy && typeof query.orderBy.createdAt === 'string') {
         result.sort((a, b) => {
           const dateA = new Date(a.createdAt).getTime();
           const dateB = new Date(b.createdAt).getTime();
-          return query.orderBy.createdAt === 'desc' ? dateB - dateA : dateA - dateB;
+          return query.orderBy!.createdAt === 'desc' ? dateB - dateA : dateA - dateB;
         });
       }
-      if (query && query.include && query.include.user) {
+      if (query?.include?.user) {
         result = result.map(order => {
           const user = users.find(u => u.id === order.userId);
           return { ...order, user };
@@ -276,13 +293,13 @@ export const db = {
   financialReport: {
     findMany: async (query?: { where?: { year: number; month?: number } }) => {
       let result = [...financialReports];
-      
-      if (query && query.where) {
+
+      if (query?.where) {
         if (query.where.year) {
-          result = result.filter(r => r.year === query.where.year);
+          result = result.filter(r => r.year === query.where!.year);
         }
         if (query.where.month) {
-          result = result.filter(r => r.month === query.where.month);
+          result = result.filter(r => r.month === query.where!.month);
         }
       }
       

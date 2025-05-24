@@ -60,8 +60,8 @@ const adminMiddleware = async (req: express.Request, res: express.Response, next
 // Authentication
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const result = await api.signIn(email, password);
+    const { email, password, mfaCode } = req.body;
+    const result = await api.signIn(email, password, mfaCode);
     res.json(result);
   } catch (error) {
     console.error('Login error:', error);
