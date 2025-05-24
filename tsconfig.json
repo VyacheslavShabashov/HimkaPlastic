@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "baseUrl": "./",
+    "paths": {
+      "~/*": ["ecotrack/src/*"],
+      "~/server/*": ["ecotrack/src/server/*"],
+      "~/client/*": ["ecotrack/src/utils/*"],
+      "~/components/*": ["ecotrack/src/components/*"],
+      "~/utils/*": ["ecotrack/src/utils/*"]
+    },
+    "rootDir": "ecotrack/src",
+    "outDir": "dist",
+    "target": "es6",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["ecotrack/src/**/*"],
+  "exclude": ["node_modules"]
+}
