@@ -79,7 +79,7 @@ export async function geocodeAddress(address: string) {
 export async function calculateDistance(fromAddress: string, toAddress: string) {
   const cacheKey = `${fromAddress}__${toAddress}`;
   if (distanceCache.has(cacheKey)) {
-    return distanceCache.get(cacheKey);
+    return distanceCache.get(cacheKey)!;
   }
   try {
     // First geocode both addresses to get coordinates
