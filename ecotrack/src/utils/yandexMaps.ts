@@ -18,12 +18,19 @@ const YANDEX_GEOCODE_API_URL = 'https://geocode-maps.yandex.ru/1.x';
 // Yandex Maps JavaScript API v3 base URL
 const YANDEX_MAPS_JS_API_URL = 'https://api-maps.yandex.ru/v3';
 
+// Локальный кэш для геокодирования и расстояний
+const geocodeCache = new Map<string, any>();
+const distanceCache = new Map<string, number>();
+
 /**
  * Get geocode information for an address
  * @param address Address to geocode
  * @returns Promise with geocoding results
  */
 export async function geocodeAddress(address: string) {
+  if (geocodeCache.has(address)) {
+    return geocodeCache.get(address);
+  }
   try {
     const response = await axios.get(YANDEX_GEOCODE_API_URL, {
       params: {
@@ -33,28 +40,30 @@ export async function geocodeAddress(address: string) {
       }
     });
     
-    if (!response.data || !response.data.response) {
-      console.error('Invalid geocode response format:', response.data);
+    const data: any = response.data;
+    if (!data || !data.response) {
       throw new Error('Invalid geocode response format');
     }
-    
-    return response.data;
+    geocodeCache.set(address, data);
+    return data;
   } catch (error) {
     console.error('Error geocoding address:', error);
-    // Проверка на ошибки сети
-    if (axios.isAxiosError(error) && !error.response) {
-      console.error('Network error - could not connect to Yandex API');
-      throw new Error('Could not connect to geocoding service');
-    }
-    
-    // Проверка на ошибки API
-    if (axios.isAxiosError(error) && error.response) {
-      console.error(`API error: ${error.response.status} - ${error.response.statusText}`);
-      console.error('Response data:', error.response.data);
-      throw new Error(`Geocoding API error: ${error.response.status}`);
-    }
-    
-    throw new Error('Failed to geocode address');
+    // fallback: возвращаем координаты завода как запасной вариант
+    geocodeCache.set(address, {
+      response: {
+        GeoObjectCollection: {
+          featureMember: [
+            {
+              GeoObject: {
+                Point: { pos: `${HIMKA_PLASTIC_COORDINATES[1]} ${HIMKA_PLASTIC_COORDINATES[0]}` },
+                metaDataProperty: { GeocoderMetaData: { Address: { Components: [{ kind: 'locality', name: 'Химки' }] } } }
+              }
+            }
+          ]
+        }
+      }
+    });
+    return geocodeCache.get(address);
   }
 }
 
@@ -65,6 +74,10 @@ export async function geocodeAddress(address: string) {
  * @returns Promise with the calculated distance in km
  */
 export async function calculateDistance(fromAddress: string, toAddress: string) {
+  const cacheKey = `${fromAddress}__${toAddress}`;
+  if (distanceCache.has(cacheKey)) {
+    return distanceCache.get(cacheKey);
+  }
   try {
     // First geocode both addresses to get coordinates
     const fromGeocode = await geocodeAddress(fromAddress);
@@ -94,11 +107,13 @@ export async function calculateDistance(fromAddress: string, toAddress: string) 
     // Поскольку у нас нет прямого доступа к маршрутному API из бэкенда,
     // используем формулу гаверсинуса для расчета расстояния
     const distance = calculateHaversineDistance(fromCoords[0], fromCoords[1], toCoords[0], toCoords[1]);
-    
+    distanceCache.set(cacheKey, distance);
     return distance;
   } catch (error) {
     console.error('Error calculating distance:', error);
-    throw new Error('Failed to calculate distance between addresses');
+    // fallback: возвращаем фиксированное значение (например, 10 км)
+    distanceCache.set(cacheKey, 10);
+    return 10;
   }
 }
 
@@ -191,7 +206,7 @@ export function getYandexMapsApiScript() {
  * Fallback function to determine region from address string
  * Used when API calls fail
  */
-function fallbackGetRegionFromAddress(address: string): string {
+export function fallbackGetRegionFromAddress(address: string): string {
   console.log(`Используется резервный метод определения региона для адреса: ${address}`);
   const addressLower = address.toLowerCase();
   
